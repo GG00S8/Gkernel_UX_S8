@@ -685,19 +685,19 @@ void xhci_stop(struct usb_hcd *hcd)
 	if (!usb_hcd_is_primary_hcd(hcd))
 		return;
 #endif
-	if (xhci->xhc_state & XHCI_STATE_HALTED)
-		return;
-
 	mutex_lock(&xhci->mutex);
 	spin_lock_irq(&xhci->lock);
-	xhci->xhc_state |= XHCI_STATE_HALTED;
-	xhci->cmd_ring_state = CMD_RING_STATE_STOPPED;
+	if (!(xhci->xhc_state & XHCI_STATE_HALTED)) {
+		xhci->xhc_state |= XHCI_STATE_HALTED;
+		xhci->cmd_ring_state = CMD_RING_STATE_STOPPED;
 
-	/* Make sure the xHC is halted for a USB3 roothub
-	 * (xhci_stop() could be called as part of failed init).
-	 */
-	xhci_halt(xhci);
-	xhci_reset(xhci);
+		/*
+		* Make sure the xHC is halted for a USB3 roothub
+		* (xhci_stop() could be called as part of failed init).
+		*/
+		xhci_halt(xhci);
+		xhci_reset(xhci);
+	}
 	spin_unlock_irq(&xhci->lock);
 
 	xhci_cleanup_msix(xhci);
@@ -3935,12 +3935,9 @@ static int xhci_setup_device(struct usb_hcd *hcd, struct usb_device *udev,
 		ret = -EINVAL;
 		break;
 	}
-	if (ret){
-#if defined(CONFIG_USB_HOST_SAMSUNG_FEATURE)
-		if(ret != -ETIME)
-#endif
+	if (ret)
 		goto out;
-	}
+
 	temp_64 = xhci_read_64(xhci, &xhci->op_regs->dcbaa_ptr);
 	xhci_dbg_trace(xhci, trace_xhci_dbg_address,
 			"Op regs DCBAA ptr = %#016llx", temp_64);

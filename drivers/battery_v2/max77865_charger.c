@@ -229,11 +229,12 @@ static int max77865_get_float_voltage(struct max77865_charger_data *charger)
 }
 static int max77865_get_charging_health(struct max77865_charger_data *charger)
 {
-	int state;
+	int state = POWER_SUPPLY_HEALTH_GOOD;
 	int vbus_state;
 	int retry_cnt;
 	u8 chg_dtls, reg_data;
 	u8 chg_cnfg_00;
+	union power_supply_propval value;
 
 	/* watchdog kick */
 	max77865_update_reg(charger->i2c, MAX77865_CHG_REG_CNFG_06,
@@ -248,86 +249,76 @@ static int max77865_get_charging_health(struct max77865_charger_data *charger)
 	case 0x00:
 		pr_info("%s: No battery and the charger is suspended\n",
 			__func__);
-		state = POWER_SUPPLY_HEALTH_UNSPEC_FAILURE;
 		break;
 	case 0x01:
 		pr_info("%s: battery is okay "
 			"but its voltage is low(~VPQLB)\n", __func__);
-		state = POWER_SUPPLY_HEALTH_GOOD;
 		break;
 	case 0x02:
 		pr_info("%s: battery dead\n", __func__);
-		state = POWER_SUPPLY_HEALTH_DEAD;
 		break;
 	case 0x03:
-		state = POWER_SUPPLY_HEALTH_GOOD;
 		break;
 	case 0x04:
 		pr_info("%s: battery is okay" \
 			"but its voltage is low\n", __func__);
-		state = POWER_SUPPLY_HEALTH_GOOD;
 		break;
 	case 0x05:
 		pr_info("%s: battery ovp\n", __func__);
-		state = POWER_SUPPLY_HEALTH_OVERVOLTAGE;
 		break;
 	default:
-		pr_info("%s: battery unknown : 0x%x\n", __func__, reg_data);
-		state = POWER_SUPPLY_HEALTH_UNKNOWN;
+		pr_info("%s: battery unknown\n", __func__);
 		break;
 	}
 
-	if (state == POWER_SUPPLY_HEALTH_GOOD) {
-		union power_supply_propval value;
-		psy_do_property("battery", get,
-				POWER_SUPPLY_PROP_HEALTH, value);
-		/* VBUS OVP state return battery OVP state */
-		vbus_state = max77865_get_vbus_state(charger);
-		/* read CHG_DTLS and detecting battery terminal error */
-		max77865_read_reg(charger->i2c,
-				  MAX77865_CHG_REG_DETAILS_01, &chg_dtls);
-		chg_dtls = ((chg_dtls & MAX77865_CHG_DTLS) >>
-			    MAX77865_CHG_DTLS_SHIFT);
-		max77865_read_reg(charger->i2c,
-				  MAX77865_CHG_REG_CNFG_00, &chg_cnfg_00);
+	psy_do_property("battery", get,
+			POWER_SUPPLY_PROP_HEALTH, value);
+	/* VBUS OVP state return battery OVP state */
+	vbus_state = max77865_get_vbus_state(charger);
+	/* read CHG_DTLS and detecting battery terminal error */
+	max77865_read_reg(charger->i2c,
+			  MAX77865_CHG_REG_DETAILS_01, &chg_dtls);
+	chg_dtls = ((chg_dtls & MAX77865_CHG_DTLS) >>
+		    MAX77865_CHG_DTLS_SHIFT);
+	max77865_read_reg(charger->i2c,
+			  MAX77865_CHG_REG_CNFG_00, &chg_cnfg_00);
 
-		/* print the log at the abnormal case */
-		if((charger->is_charging == 1) && (chg_dtls & 0x08)) {
-			max77865_test_read(charger);
-			max77865_set_charger_state(charger, DISABLE);
-			max77865_set_float_voltage(charger, charger->float_voltage);
-			max77865_set_charger_state(charger, ENABLE);
-		}
+	/* print the log at the abnormal case */
+	if((charger->is_charging == 1) && ((chg_dtls == 0x08) || (chg_dtls == 0x0B))) {
+		max77865_test_read(charger);
+		max77865_set_charger_state(charger, DISABLE);
+		max77865_set_float_voltage(charger, charger->float_voltage);
+		max77865_set_charger_state(charger, ENABLE);
+	}
 
-		pr_info("%s: vbus_state : 0x%x, chg_dtls : 0x%x\n", __func__, vbus_state, chg_dtls);
-		/*  OVP is higher priority */
-		if (vbus_state == 0x02) { /*  CHGIN_OVLO */
-			pr_info("%s: vbus ovp\n", __func__);
-			state = POWER_SUPPLY_HEALTH_OVERVOLTAGE;
-			if (is_wireless_type(charger->cable_type)) {
-				retry_cnt = 0;
-				do {
-					msleep(50);
-					vbus_state = max77865_get_vbus_state(charger);
-				} while((retry_cnt++ < 2) && (vbus_state == 0x02));
-				if (vbus_state == 0x02) {
-					state = POWER_SUPPLY_HEALTH_OVERVOLTAGE;
-					pr_info("%s: wpc and over-voltage\n", __func__);
-				} else
-					state = POWER_SUPPLY_HEALTH_GOOD;
-			}
-		} else if (((vbus_state == 0x0) || (vbus_state == 0x01)) && (chg_dtls & 0x08) && \
-			    (chg_cnfg_00 & MAX77865_MODE_BUCK) &&	\
-			    (chg_cnfg_00 & MAX77865_MODE_CHGR) &&	\
-			    is_not_wireless_type(charger->cable_type)) {
-			pr_info("%s: vbus is under\n", __func__);
-			state = POWER_SUPPLY_HEALTH_UNDERVOLTAGE;
-		} else if ((value.intval == POWER_SUPPLY_HEALTH_UNDERVOLTAGE) && \
-				((vbus_state == 0x0) || (vbus_state == 0x01)) && \
-				is_not_wireless_type(charger->cable_type)) {
-			pr_info("%s: keep under-voltage\n", __func__);
-			state = POWER_SUPPLY_HEALTH_UNDERVOLTAGE;
+	pr_info("%s: vbus_state : 0x%x, chg_dtls : 0x%x\n", __func__, vbus_state, chg_dtls);
+	/*  OVP is higher priority */
+	if (vbus_state == 0x02) { /*  CHGIN_OVLO */
+		pr_info("%s: vbus ovp\n", __func__);
+		state = POWER_SUPPLY_HEALTH_OVERVOLTAGE;
+		if (is_wireless_type(charger->cable_type)) {
+			retry_cnt = 0;
+			do {
+				msleep(50);
+				vbus_state = max77865_get_vbus_state(charger);
+			} while((retry_cnt++ < 2) && (vbus_state == 0x02));
+			if (vbus_state == 0x02) {
+				state = POWER_SUPPLY_HEALTH_OVERVOLTAGE;
+				pr_info("%s: wpc and over-voltage\n", __func__);
+			} else
+				state = POWER_SUPPLY_HEALTH_GOOD;
 		}
+	} else if (((vbus_state == 0x0) || (vbus_state == 0x01)) && (chg_dtls & 0x08) && \
+		   (chg_cnfg_00 & MAX77865_MODE_BUCK) &&		\
+		   (chg_cnfg_00 & MAX77865_MODE_CHGR) &&		\
+		   is_not_wireless_type(charger->cable_type)) {
+		pr_info("%s: vbus is under\n", __func__);
+		state = POWER_SUPPLY_HEALTH_UNDERVOLTAGE;
+	} else if ((value.intval == POWER_SUPPLY_HEALTH_UNDERVOLTAGE) && \
+		   ((vbus_state == 0x0) || (vbus_state == 0x01)) &&	\
+		   is_not_wireless_type(charger->cable_type)) {
+		pr_info("%s: keep under-voltage\n", __func__);
+		state = POWER_SUPPLY_HEALTH_UNDERVOLTAGE;
 	}
 
 	return (int)state;
@@ -594,6 +585,75 @@ static void max77865_set_charger_state(struct max77865_charger_data *charger,
 	max77865_read_reg(charger->i2c, MAX77865_CHG_REG_CNFG_00, &cnfg_00);
 	max77865_read_reg(charger->i2c, MAX77865_CHG_REG_CNFG_12, &cnfg_12);
 	pr_info("%s : CHG_CNFG_00(0x%02x), CHG_CNFG_12(0x%02x)\n", __func__, cnfg_00, cnfg_12);
+}
+
+static void max77865_set_otg(struct max77865_charger_data *charger, int enable)
+{
+	union power_supply_propval value;
+	u8 reg = 0;
+	static u8 chg_int_state;
+
+	pr_info("%s: CHGIN-OTG %s\n", __func__, enable > 0 ? "on" : "off");
+	if (charger->otg_on == enable || lpcharge)
+		return;
+
+	wake_lock(&charger->otg_wake_lock);
+	mutex_lock(&charger->charger_mutex);
+	/* CHGIN-OTG */
+	value.intval = enable;
+	if (enable) {
+		psy_do_property("wireless", set,
+			POWER_SUPPLY_PROP_CHARGE_OTG_CONTROL, value);
+
+		max77865_read_reg(charger->i2c, MAX77865_CHG_REG_INT_MASK,
+			&chg_int_state);
+
+		/* disable charger interrupt: CHG_I, CHGIN_I */
+		/* enable charger interrupt: BYP_I */
+		max77865_update_reg(charger->i2c, MAX77865_CHG_REG_INT_MASK,
+			MAX77865_CHG_IM | MAX77865_CHGIN_IM,
+			MAX77865_CHG_IM | MAX77865_CHGIN_IM | MAX77865_BYP_IM);
+
+		/* Update CHG_CNFG_11 to 0x16(5.020V) */
+		max77865_write_reg(charger->i2c,
+				   MAX77865_CHG_REG_CNFG_11, 0x16);
+		/* OTG off, boost on */
+		max77865_update_reg(charger->i2c, MAX77865_CHG_REG_CNFG_00,
+				   CHG_CNFG_00_BOOST_MASK, CHG_CNFG_00_OTG_CTRL);
+
+		msleep(100);
+
+		/* OTG on, boost on */
+		max77865_update_reg(charger->i2c, MAX77865_CHG_REG_CNFG_00,
+				   CHG_CNFG_00_OTG_CTRL, CHG_CNFG_00_OTG_CTRL);
+
+	} else {
+		/* OTG off(UNO on), boost off */
+		max77865_update_reg(charger->i2c, MAX77865_CHG_REG_CNFG_00,
+			0, CHG_CNFG_00_OTG_CTRL);
+
+		/* Update CHG_CNFG_11 to 0x00(3.485V) */
+		max77865_write_reg(charger->i2c,
+				   MAX77865_CHG_REG_CNFG_11, 0x00);
+		mdelay(50);
+
+		/* enable charger interrupt */
+		max77865_write_reg(charger->i2c,
+			MAX77865_CHG_REG_INT_MASK, chg_int_state);
+
+		psy_do_property("wireless", set,
+			POWER_SUPPLY_PROP_CHARGE_OTG_CONTROL, value);
+	}
+	charger->otg_on = enable;
+	max77865_read_reg(charger->i2c, MAX77865_CHG_REG_INT_MASK,
+		&chg_int_state);
+	max77865_read_reg(charger->i2c, MAX77865_CHG_REG_CNFG_00,
+		&reg);
+	mutex_unlock(&charger->charger_mutex);
+	wake_unlock(&charger->otg_wake_lock);
+	pr_info("%s: INT_MASK(0x%x), CHG_CNFG_00(0x%x)\n",
+		__func__, chg_int_state, reg);
+	power_supply_changed(charger->psy_otg);
 }
 
 static void max77865_check_slow_charging(struct max77865_charger_data *charger,
@@ -875,7 +935,9 @@ static int max77865_chg_get_property(struct power_supply *psy,
 		}
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_OTG_CONTROL:
+		mutex_lock(&charger->charger_mutex);
 		val->intval = charger->otg_on;
+		mutex_unlock(&charger->charger_mutex);
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_COUNTER_SHADOW:
 		break;
@@ -925,7 +987,6 @@ static int max77865_chg_set_property(struct power_supply *psy,
 			  const union power_supply_propval *val)
 {
 	struct max77865_charger_data *charger = power_supply_get_drvdata(psy);
-	union power_supply_propval value;
 	u8 reg = 0;
 	static u8 chg_int_state;
 	int buck_state = ENABLE;
@@ -975,7 +1036,8 @@ static int max77865_chg_set_property(struct power_supply *psy,
 						  MAX77865_CHG_REG_INT_MASK, &reg_data);
 				pr_info("%s : enable aicl : 0x%x\n", __func__, reg_data);
 			}
-		} else if (is_hv_wire_type(charger->cable_type)) {
+		} else if (is_hv_wire_type(charger->cable_type) ||
+			(charger->cable_type == SEC_BATTERY_CABLE_HV_TA_CHG_LIMIT)) {
 			/* Disable AICL IRQ */
 			if (charger->irq_aicl_enabled == 1) {
 				u8 reg_data;
@@ -1047,65 +1109,7 @@ static int max77865_chg_set_property(struct power_supply *psy,
 		charger->otg_on = false;
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_OTG_CONTROL:
-		pr_info("%s: CHGIN-OTG %s\n", __func__, val->intval > 0 ? "on" : "off");
-		if (charger->otg_on == val->intval || lpcharge)
-			return 0;
-		mutex_lock(&charger->charger_mutex);
-		/* CHGIN-OTG */
-		if (val->intval) {
-			if (is_hv_wireless_type(charger->cable_type)) {
-				pr_info("%s: OTG enabled on HV_WC, set 5V", __func__);
-				value.intval = WIRELESS_VOUT_5V;
-				psy_do_property(charger->pdata->wireless_charger_name, set,
-					POWER_SUPPLY_PROP_INPUT_VOLTAGE_REGULATION, value);
-				mdelay(200);
-			}
-			max77865_read_reg(charger->i2c, MAX77865_CHG_REG_INT_MASK,
-				&chg_int_state);
-
-			/* disable charger interrupt: CHG_I, CHGIN_I */
-			/* enable charger interrupt: BYP_I */
-			max77865_update_reg(charger->i2c, MAX77865_CHG_REG_INT_MASK,
-				MAX77865_CHG_IM | MAX77865_CHGIN_IM,
-				MAX77865_CHG_IM | MAX77865_CHGIN_IM | MAX77865_BYP_IM);
-
-			/* OTG on, boost on */
-			max77865_update_reg(charger->i2c, MAX77865_CHG_REG_CNFG_00,
-				CHG_CNFG_00_OTG_CTRL, CHG_CNFG_00_OTG_CTRL);
-
-			/* Update CHG_CNFG_11 to 0x16(5.020V) */
-			max77865_write_reg(charger->i2c,
-					   MAX77865_CHG_REG_CNFG_11, 0x16);
-		} else {
-			/* OTG off(UNO on), boost off */
-			max77865_update_reg(charger->i2c, MAX77865_CHG_REG_CNFG_00,
-				0, CHG_CNFG_00_OTG_CTRL);
-
-			/* Update CHG_CNFG_11 to 0x00(3.485V) */
-			max77865_write_reg(charger->i2c,
-					   MAX77865_CHG_REG_CNFG_11, 0x00);
-			mdelay(50);
-
-			/* enable charger interrupt */
-			max77865_write_reg(charger->i2c,
-				MAX77865_CHG_REG_INT_MASK, chg_int_state);
-
-			if (is_hv_wireless_type(charger->cable_type)) {
-				pr_info("%s: OTG disabled on HV_WC, set 9V", __func__);
-				value.intval = WIRELESS_VOUT_9V_OTG;
-				psy_do_property(charger->pdata->wireless_charger_name, set,
-					POWER_SUPPLY_PROP_INPUT_VOLTAGE_REGULATION, value);
-			}
-		}
-		charger->otg_on = val->intval;
-		max77865_read_reg(charger->i2c, MAX77865_CHG_REG_INT_MASK,
-			&chg_int_state);
-		max77865_read_reg(charger->i2c, MAX77865_CHG_REG_CNFG_00,
-			&reg);
-		mutex_unlock(&charger->charger_mutex);
-		pr_info("%s: INT_MASK(0x%x), CHG_CNFG_00(0x%x)\n",
-			__func__, chg_int_state, reg);
-		power_supply_changed(charger->psy_otg);
+		max77865_set_otg(charger, val->intval);
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_UNO_CONTROL:
 		pr_info("%s: WCIN-UNO %s\n", __func__, val->intval > 0 ? "on" : "off");
@@ -1185,7 +1189,9 @@ static int max77865_otg_get_property(struct power_supply *psy,
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_ONLINE:
+		mutex_lock(&charger->charger_mutex);
 		val->intval = charger->otg_on;
+		mutex_unlock(&charger->charger_mutex);
 		break;
 	default:
 		return -EINVAL;
@@ -1198,71 +1204,10 @@ static int max77865_otg_set_property(struct power_supply *psy,
 				const union power_supply_propval *val)
 {
 	struct max77865_charger_data *charger = power_supply_get_drvdata(psy);
-	union power_supply_propval value;
-	static u8 chg_int_state;
-	u8 chg_cnfg_00;
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_ONLINE:
-		pr_info("%s: CHGIN-OTG %s\n", __func__, val->intval > 0 ? "on" : "off");
-		if (charger->otg_on == val->intval || lpcharge)
-			return 0;
-		mutex_lock(&charger->charger_mutex);
-		/* CHGIN-OTG */
-		if (val->intval) {
-			if (is_hv_wireless_type(charger->cable_type)) {
-				pr_info("%s: OTG enabled on HV_WC, set 5V", __func__);
-				value.intval = WIRELESS_VOUT_5V;
-				psy_do_property(charger->pdata->wireless_charger_name, set,
-					POWER_SUPPLY_PROP_INPUT_VOLTAGE_REGULATION, value);
-				mdelay(200);
-			}
-			max77865_read_reg(charger->i2c, MAX77865_CHG_REG_INT_MASK,
-				&chg_int_state);
-
-			/* disable charger interrupt: CHG_I, CHGIN_I */
-			/* enable charger interrupt: BYP_I */
-			max77865_update_reg(charger->i2c, MAX77865_CHG_REG_INT_MASK,
-				MAX77865_CHG_IM | MAX77865_CHGIN_IM,
-				MAX77865_CHG_IM | MAX77865_CHGIN_IM | MAX77865_BYP_IM);
-
-			/* OTG on, boost on */
-			max77865_update_reg(charger->i2c, MAX77865_CHG_REG_CNFG_00,
-				CHG_CNFG_00_OTG_CTRL, CHG_CNFG_00_OTG_CTRL);
-
-			/* Update CHG_CNFG_11 to 0x16(5.020V) */
-			max77865_write_reg(charger->i2c,
-					   MAX77865_CHG_REG_CNFG_11, 0x16);
-		} else {
-			/* OTG off(UNO on), boost off */
-			max77865_update_reg(charger->i2c, MAX77865_CHG_REG_CNFG_00,
-				0, CHG_CNFG_00_OTG_CTRL);
-
-			/* Update CHG_CNFG_11 to 0x00(3.485V) */
-			max77865_write_reg(charger->i2c,
-					   MAX77865_CHG_REG_CNFG_11, 0x00);
-			mdelay(50);
-
-			/* enable charger interrupt */
-			max77865_write_reg(charger->i2c,
-					   MAX77865_CHG_REG_INT_MASK, chg_int_state);
-
-			if (is_hv_wireless_type(charger->cable_type)) {
-				pr_info("%s: OTG disabled on HV_WC, set 9V", __func__);
-				value.intval = WIRELESS_VOUT_9V_OTG;
-				psy_do_property(charger->pdata->wireless_charger_name, set,
-					POWER_SUPPLY_PROP_INPUT_VOLTAGE_REGULATION, value);
-			}
-		}
-		charger->otg_on = val->intval;
-		max77865_read_reg(charger->i2c, MAX77865_CHG_REG_INT_MASK,
-			&chg_int_state);
-		max77865_read_reg(charger->i2c, MAX77865_CHG_REG_CNFG_00,
-			&chg_cnfg_00);
-		mutex_unlock(&charger->charger_mutex);
-		pr_info("%s: INT_MASK(0x%x), CHG_CNFG_00(0x%x)\n",
-			__func__, chg_int_state, chg_cnfg_00);
-		power_supply_changed(charger->psy_otg);
+		max77865_set_otg(charger, val->intval);
 		break;
 	default:
 		return -EINVAL;
@@ -1936,6 +1881,8 @@ static int max77865_charger_probe(struct platform_device *pdev)
 	wake_lock_init(&charger->wc_current_wake_lock, WAKE_LOCK_SUSPEND,
 		       "charger->wc-current");
 	INIT_DELAYED_WORK(&charger->wc_current_work, max77865_wc_current_work);
+	wake_lock_init(&charger->otg_wake_lock, WAKE_LOCK_SUSPEND,
+					       "otg-path");
 
 	charger_cfg.drv_data = charger;
 
@@ -2092,10 +2039,10 @@ static int max77865_charger_resume(struct device *dev)
 #define max77865_charger_resume NULL
 #endif
 
-static void max77865_charger_shutdown(struct device *dev)
+static void max77865_charger_shutdown(struct platform_device *pdev)
 {
-	struct max77865_charger_data *charger =
-				dev_get_drvdata(dev);
+	struct max77865_charger_data *charger = platform_get_drvdata(pdev);
+
 	u8 reg_data;
 
 	pr_info("%s: max77865 Charger driver shutdown\n", __func__);
@@ -2128,10 +2075,10 @@ static struct platform_driver max77865_charger_driver = {
 #ifdef CONFIG_PM
 		.pm = &max77865_charger_pm_ops,
 #endif
-		.shutdown = max77865_charger_shutdown,
 	},
 	.probe = max77865_charger_probe,
 	.remove = max77865_charger_remove,
+	.shutdown = max77865_charger_shutdown,
 };
 
 static int __init max77865_charger_init(void)

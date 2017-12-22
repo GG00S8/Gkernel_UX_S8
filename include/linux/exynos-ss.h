@@ -16,6 +16,7 @@
 
 #ifdef CONFIG_EXYNOS_SNAPSHOT
 #include <asm/ptrace.h>
+#include <linux/bug.h>
 
 /* mandatory */
 extern void exynos_ss_task(int cpu, void *v_task);
@@ -35,15 +36,20 @@ extern int exynos_ss_post_reboot(void);
 extern int exynos_ss_set_hardlockup(int);
 extern int exynos_ss_get_hardlockup(void);
 extern unsigned int exynos_ss_get_item_size(char *);
+extern unsigned long exynos_ss_get_item_vaddr(char *);
 extern unsigned int exynos_ss_get_item_paddr(char *);
 extern bool exynos_ss_dumper_one(void *, char *, size_t, size_t *);
 extern void exynos_ss_panic_handler_safe(void);
 extern unsigned long exynos_ss_get_spare_vaddr(unsigned int offset);
 extern unsigned long exynos_ss_get_spare_paddr(unsigned int offset);
+extern unsigned long exynos_ss_get_last_pc(unsigned int cpu);
+extern unsigned long exynos_ss_get_last_pc_paddr(void);
+extern void exynos_ss_hook_hardlockup_entry(void *v_regs);
+extern void exynos_ss_hook_hardlockup_exit(void);
+
 #ifdef CONFIG_EXYNOS_DRAMTEST
 extern int disable_mc_powerdn(void);
 #endif
-
 /* option */
 #ifdef CONFIG_EXYNOS_SNAPSHOT_ACPM
 void exynos_ss_acpm(unsigned long long timestamp, const char *log, unsigned int data);
@@ -204,7 +210,15 @@ void exynos_ss_dump_sfr(void);
 #define exynos_ss_check_crash_key(a,b)	do { } while(0)
 #define exynos_ss_dm(a,b,c,d,e)		do { } while(0)
 #define exynos_ss_panic_handler_safe()	do { } while(0)
+#define exynos_ss_get_last_pc(a)	do { } while(0)
+#define exynos_ss_get_last_pc_paddr()	do { } while(0)
+#define exynos_ss_hook_hardlockup_entry(a) do { } while(0)
+#define exynos_ss_hook_hardlockup_exit() do { } while(0)
 
+static inline unsigned long exynos_ss_get_item_vaddr(char *name)
+{
+	return 0;
+}
 static inline bool exynos_ss_dumper_one(void *v_dumper,
 				char *line, size_t size, size_t *len)
 {
@@ -220,6 +234,7 @@ static inline unsigned long exynos_ss_get_spare_paddr(unsigned int offset)
 }
 #endif /* CONFIG_EXYNOS_SNAPSHOT */
 
+static inline void exynos_ss_bug(void) {BUG();}
 struct ess_dumper {
 	bool active;
 	u32 items;

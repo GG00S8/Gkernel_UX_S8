@@ -210,13 +210,14 @@
 #define SEC_TS_CMD_CALIBRATION_OFFSET_SDC	0x8F
 
 /* SEC_TS SPONGE OPCODE COMMAND */
-#define SEC_TS_CMD_SPONGE_GET_INFO	0x90
-#define SEC_TS_CMD_SPONGE_WRITE_PARAM	0x91
-#define SEC_TS_CMD_SPONGE_READ_PARAM	0x92
-#define SEC_TS_CMD_SPONGE_NOTIFY_PACKET	0x93
+#define SEC_TS_CMD_SPONGE_GET_INFO			0x90
+#define SEC_TS_CMD_SPONGE_WRITE_PARAM			0x91
+#define SEC_TS_CMD_SPONGE_READ_PARAM			0x92
+#define SEC_TS_CMD_SPONGE_NOTIFY_PACKET			0x93
 #define SEC_TS_CMD_SPONGE_OFFSET_PRESSURE_LEVEL		0x5E
 #define SEC_TS_CMD_SPONGE_OFFSET_PRESSURE_THD_HIGH	0x84
 #define SEC_TS_CMD_SPONGE_OFFSET_PRESSURE_THD_LOW	0x86
+#define SEC_TS_CMD_SPONGE_LP_DUMP			0x01F0
 
 #define SEC_TS_CMD_STATUS_EVENT_TYPE	0xA0
 #define SEC_TS_READ_FW_INFO		0xA2
@@ -233,6 +234,8 @@
 #define SEC_TS_CMD_LONGPRESS_DROP_DIFF	0xAD
 #define SEC_TS_READ_TS_STATUS		0xAF
 #define SEC_TS_CMD_SELFTEST		0xAE
+#define SEC_TS_READ_FORCE_RECAL_COUNT	0xB0
+#define SEC_TS_READ_FORCE_SIG_MAX_VAL	0xB1
 
 /* SEC_TS FLASH COMMAND */
 #define SEC_TS_CMD_FLASH_READ_ADDR	0xD0
@@ -390,8 +393,7 @@ enum grip_set_data {
 
 typedef enum {
 	SEC_TS_STATE_POWER_OFF = 0,
-	SEC_TS_STATE_LPM_SUSPEND,
-	SEC_TS_STATE_LPM_RESUME,
+	SEC_TS_STATE_LPM,
 	SEC_TS_STATE_POWER_ON
 } TOUCH_POWER_MODE;
 
@@ -753,7 +755,7 @@ struct sec_ts_data {
 	int (*sec_ts_i2c_read)(struct sec_ts_data *ts, u8 reg, u8 *data, int len);
 	int (*sec_ts_i2c_write_burst)(struct sec_ts_data *ts, u8 *data, int len);
 	int (*sec_ts_i2c_read_bulk)(struct sec_ts_data *ts, u8 *data, int len);
-	int (*sec_ts_read_sponge)(struct sec_ts_data *ts, u8 *data);
+	int (*sec_ts_read_sponge)(struct sec_ts_data *ts, u8 *data, int len);
 };
 
 struct sec_ts_plat_data {
@@ -864,8 +866,9 @@ extern void set_grip_data_to_ic(struct sec_ts_data *ts, u8 flag);
 extern void sec_ts_set_grip_type(struct sec_ts_data *ts, u8 set_type);
 
 #ifdef CONFIG_TRUSTONIC_TRUSTED_UI
-extern void trustedui_mode_on(void);
-extern void trustedui_mode_off(void);
+//extern void trustedui_mode_on(void);
+//extern void trustedui_mode_off(void);
+extern int tui_force_close(uint32_t arg);
 #endif
 
 #endif

@@ -61,7 +61,7 @@
 #include <linux/usb/composite.h>
 
 /* platform specific definitions */
-#define __ANDROID__
+/* ex) #define __ANDROID__ */
 
 /* platform specific pre-processing */
 #define CONN_GADGET_SHORTNAME "android_ssusbcon"

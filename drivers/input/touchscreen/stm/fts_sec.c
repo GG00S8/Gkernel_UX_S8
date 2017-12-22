@@ -405,9 +405,9 @@ static ssize_t read_checksum_show(struct device *dev,
 	struct sec_cmd_data *sec = dev_get_drvdata(dev);
 	struct fts_ts_info *info = container_of(sec, struct fts_ts_info, sec);
 
-	input_info(true, &info->client->dev, "%s: %d\n", __func__, info->checksum_result);
+	input_info(true, &info->client->dev, "%s: crc fail count in NV: %d\n", __func__, info->nv_crc_fail_count);
 
-	return snprintf(buf, SEC_CMD_BUF_SIZE, "%d", info->checksum_result);
+	return snprintf(buf, SEC_CMD_BUF_SIZE, "%d", info->nv_crc_fail_count);
 }
 
 
@@ -418,9 +418,9 @@ static ssize_t clear_checksum_store(struct device *dev,
 	struct sec_cmd_data *sec = dev_get_drvdata(dev);
 	struct fts_ts_info *info = container_of(sec, struct fts_ts_info, sec);
 
-	info->checksum_result = 0;
+//	info->checksum_result = 0;
 
-	input_info(true, &info->client->dev, "%s: clear\n", __func__);
+	input_info(true, &info->client->dev, "%s:nothing\n", __func__);
 
 	return count;
 }
@@ -574,6 +574,109 @@ static ssize_t pressure_enable_store(struct device *dev,
 	return count;
 }
 
+static ssize_t get_lp_dump(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct sec_cmd_data *sec = dev_get_drvdata(dev);
+	struct fts_ts_info *info = container_of(sec, struct fts_ts_info, sec);
+	u8 string_data[8] = {0, };
+	u16 current_index;
+	int i, ret;
+	unsigned short string_addr;
+
+	if (info->touch_stopped) {
+		input_err(true, &info->client->dev, "%s: Touch is stopped!\n", __func__);
+		return snprintf(buf, SEC_CMD_BUF_SIZE, "TSP turned off");
+	}
+
+	string_addr = FTS_CMD_STRING_ACCESS + FTS_CMD_SPONGE_LP_DUMP;
+
+	disable_irq(info->client->irq);
+
+	ret = info->fts_read_from_string(info, &string_addr, string_data, 2);
+	if (ret < 0) {
+		input_err(true, &info->client->dev, "%s: Failed to read rect\n", __func__);
+		snprintf(buf, SEC_CMD_BUF_SIZE, "NG, Failed to read rect");
+		goto out;
+	}
+
+	current_index = (string_data[1] & 0xFF) << 8 | (string_data[0] & 0xFF);
+	if (current_index > 1000 || current_index < 500) {
+		input_err(true, &info->client->dev,
+				"Failed to Sponge LP log %d\n", current_index);
+		snprintf(buf, SEC_CMD_BUF_SIZE,
+				"NG, Failed to Sponge LP log, current_index=%d",
+				current_index);
+		goto out;
+	}
+
+	input_info(true, &info->client->dev,
+			"%s: DEBUG current_index = %d\n", __func__, current_index);
+
+	/* sponge has 62 stacks for LP dump */
+	for (i = 61; i >= 0; i--) {
+		u16 data0, data1, data2, data3;
+		char buff[30] = {0, };
+		u16 string_addr;
+
+		string_addr = current_index - (8 * i);
+		if (string_addr < 500)
+			string_addr += FTS_CMD_SPONGE_LP_DUMP;
+
+		string_addr += FTS_CMD_STRING_ACCESS;
+
+		ret = info->fts_read_from_string(info, &string_addr, string_data, 8);
+		if (ret < 0) {
+			input_err(true, &info->client->dev,
+					"%s: Failed to read rect\n", __func__);
+			snprintf(buf, SEC_CMD_BUF_SIZE,
+					"NG, Failed to read rect, addr=%d",
+					string_addr);
+			goto out;
+		}
+
+		data0 = (string_data[1] & 0xFF) << 8 | (string_data[0] & 0xFF);
+		data1 = (string_data[3] & 0xFF) << 8 | (string_data[2] & 0xFF);
+		data2 = (string_data[5] & 0xFF) << 8 | (string_data[4] & 0xFF);
+		data3 = (string_data[7] & 0xFF) << 8 | (string_data[6] & 0xFF);
+		if (data0 || data1 || data2 || data3) {
+			snprintf(buff, sizeof(buff),
+					"%d: %04x%04x%04x%04x\n",
+					(string_addr - FTS_CMD_STRING_ACCESS), data0, data1, data2, data3);
+			strncat(buf, buff, sizeof(buff));
+		}
+	}
+
+out:
+	enable_irq(info->client->irq);
+	return strlen(buf);
+}
+
+static ssize_t get_force_recal_count(struct device *dev,
+					struct device_attribute *attr, char *buf)
+{
+	struct sec_cmd_data *sec = dev_get_drvdata(dev);
+	struct fts_ts_info *info = container_of(sec, struct fts_ts_info, sec);
+	u8 rbuf[3] = {0, };
+	u32 recal_count;
+	int ret;
+
+	if (info->touch_stopped) {
+		input_err(true, &info->client->dev, "%s: Touch is stopped!\n", __func__);
+		return snprintf(buf, SEC_CMD_BUF_SIZE, "TSP turned off");
+	}
+
+	ret = info->fts_get_sysinfo_data(info, READ_FORCE_RECAL_COUNT, 2, rbuf);
+	if (ret < 0) {
+		input_err(true, &info->client->dev,
+				"%s: Failed to read\n", __func__);
+		return snprintf(buf, SEC_CMD_BUF_SIZE, "%d", -EIO);
+	}
+
+	recal_count = (rbuf[1] & 0xFF) << 8 | (rbuf[0] & 0xFF);
+
+	return snprintf(buf, SEC_CMD_BUF_SIZE, "%d", recal_count);
+}
+
 static DEVICE_ATTR(ito_check, S_IRUGO, read_ito_check_show, NULL);
 static DEVICE_ATTR(raw_check, S_IRUGO, read_raw_check_show, NULL);
 static DEVICE_ATTR(multi_count, S_IRUGO | S_IWUSR | S_IWGRP, read_multi_count_show, clear_multi_count_store);
@@ -587,6 +690,8 @@ static DEVICE_ATTR(all_touch_count, S_IRUGO | S_IWUSR | S_IWGRP, read_all_touch_
 static DEVICE_ATTR(z_value, S_IRUGO | S_IWUSR | S_IWGRP, read_z_value_show, clear_z_value_store);
 static DEVICE_ATTR(scrub_pos, S_IRUGO, fts_scrub_position, NULL);
 static DEVICE_ATTR(pressure_enable, S_IRUGO | S_IWUSR | S_IWGRP, pressure_enable_show, pressure_enable_store);
+static DEVICE_ATTR(get_lp_dump, 0444, get_lp_dump, NULL);
+static DEVICE_ATTR(force_recal_count, 0444, get_force_recal_count, NULL);
 
 static struct attribute *sec_touch_facotry_attributes[] = {
 	&dev_attr_scrub_pos.attr,
@@ -602,6 +707,8 @@ static struct attribute *sec_touch_facotry_attributes[] = {
 	&dev_attr_all_touch_count.attr,
 	&dev_attr_z_value.attr,
 	&dev_attr_pressure_enable.attr,
+	&dev_attr_get_lp_dump.attr,
+	&dev_attr_force_recal_count.attr,
 	NULL,
 };
 
@@ -926,8 +1033,7 @@ int fts_panel_ito_test(struct fts_ts_info *info)
 	int retry = 0;
 	int result = -1;
 
-	fts_systemreset(info);
-	fts_wait_for_ready(info);
+	fts_systemreset(info, 10);
 
 	disable_irq(info->irq);
 	fts_interrupt_set(info, INT_DISABLE);
@@ -1000,10 +1106,7 @@ int fts_panel_ito_test(struct fts_ts_info *info)
 		fts_delay(10);
 	}
 
-	fts_systemreset(info);
-
-	/* wait for ready event */
-	fts_wait_for_ready(info);
+	fts_systemreset(info, 10);
 
 #ifdef FTS_SUPPORT_NOISE_PARAM
 	fts_set_noise_param(info);
@@ -1358,21 +1461,31 @@ static void get_checksum_data(void *device_data)
 		return;
 	}
 
-	fts_interrupt_set(info, INT_DISABLE);
-
-	rc = info->fts_get_sysinfo_data(info, FTS_SI_CONFIG_CHECKSUM, 5, data);
-	if (rc <= 0) {
-		input_err(true, info->dev, "%s: Get checksum data Read Fail!! [Data : %2X%2X%2X%2X]\n", __func__, data[1], data[0], data[3], data[2]);
+	rc = fts_systemreset(info, 10);
+	if (rc != FTS_NOT_ERROR) {
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
 		sec->cmd_state = SEC_CMD_STATUS_FAIL;
-		return;
+		input_info(true, &info->client->dev, "%s: %s\n", __func__, buff);
+	} else {
+		fts_reinit(info);
+
+		fts_interrupt_set(info, INT_DISABLE);
+
+		rc = info->fts_get_sysinfo_data(info, FTS_SI_CONFIG_CHECKSUM, 5, data);
+		if (rc <= 0) {
+			input_err(true, info->dev, "%s: Get checksum data Read Fail!! [Data : %2X%2X%2X%2X]\n", __func__, data[1], data[0], data[3], data[2]);
+			sec->cmd_state = SEC_CMD_STATUS_FAIL;
+			return;
+		}
+
+		fts_interrupt_set(info, INT_ENABLE);
+
+		snprintf(buff, sizeof(buff), "%02X%02X%02X%02X", data[1], data[0], data[3], data[2]);
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_OK;
+		input_info(true, &info->client->dev, "%s: %s\n", __func__, buff);
 	}
-
-	fts_interrupt_set(info, INT_ENABLE);
-
-	snprintf(buff, sizeof(buff), "%02X%02X%02X%02X", data[1], data[0], data[3], data[2]);
-	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
-	sec->cmd_state = SEC_CMD_STATUS_OK;
-	input_info(true, &info->client->dev, "%s: %s\n", __func__, buff);
 }
 
 static void run_reference_read(void *device_data)
@@ -1856,8 +1969,7 @@ static void fts_read_ix_data(struct fts_ts_info *info, bool allnode)
 	input_info(true, &info->client->dev, "%s: MIN_RX_IX_SUM : %d MAX_RX_IX_SUM : %d\n",
 				__func__, min_rx_ix_sum, max_rx_ix_sum );
 
-	fts_systemreset(info);
-	fts_wait_for_ready(info);
+	fts_systemreset(info, 10);
 
 	fts_command(info, SENSEON);
 #ifdef FTS_SUPPORT_PRESSURE_SENSOR
@@ -1983,9 +2095,7 @@ static void fts_read_self_raw_frame(struct fts_ts_info *info, unsigned short oAd
 		return;
 	}
 
-	fts_systemreset(info);
-	fts_delay(50);
-	fts_wait_for_ready(info);
+	fts_systemreset(info, 60);
 
 	// Don't enter to IDLE mode
 	fts_write_reg(info, &cmd[0], 4);
@@ -2312,7 +2422,7 @@ static void run_cx_data_read(void *device_data)
 
 	/* Read compensation data */
 	for (j = 0; j < tx_num; j++) {
-		memset(&ReadData[j], 0x0, rx_num);
+		memset(&ReadData[j], 0x0, (rx_num + 1));
 		memset(pStr, 0x0, 4 * (rx_num + 1));
 		snprintf(pTmp, sizeof(pTmp), "Tx%02d | ", j);
 		strncat(pStr, pTmp, 4 * rx_num);
@@ -2323,7 +2433,7 @@ static void run_cx_data_read(void *device_data)
 		regAdd[2] = addr & 0xFF;
 		fts_read_reg(info, regAdd, 3, &ReadData[j][0], rx_num + 1);
 		for (i = 0; i < rx_num; i++) {
-			snprintf(pTmp, sizeof(pTmp), "%3d", ReadData[j][i]);
+			snprintf(pTmp, sizeof(pTmp), "%3d", ReadData[j][i + 1]);
 			strncat(pStr, pTmp, 4 * rx_num);
 		}
 		input_info(true, &info->client->dev, "%s\n", pStr);
@@ -2332,7 +2442,7 @@ static void run_cx_data_read(void *device_data)
 	if (info->cx_data) {
 		for (j = 0; j < tx_num; j++) {
 			for(i = 0; i < rx_num; i++)
-				info->cx_data[(j * rx_num) + i] = ReadData[j][i];
+				info->cx_data[(j * rx_num) + i] = ReadData[j][i + 1];
 		}
 	}
 
@@ -2437,7 +2547,7 @@ static void get_cx_all_data(void *device_data)
 
 	/* Read compensation data */
 	for (j = 0; j < tx_num; j++) {
-		memset(&ReadData[j], 0x0, rx_num);
+		memset(&ReadData[j], 0x0, (rx_num + 1));
 		memset(pStr, 0x0, 4 * (rx_num + 1));
 		snprintf(pTmp, sizeof(pTmp), "Tx%02d | ", j);
 		strncat(pStr, pTmp, 4 * rx_num);
@@ -2448,7 +2558,7 @@ static void get_cx_all_data(void *device_data)
 		regAdd[2] = addr & 0xFF;
 		fts_read_reg(info, regAdd, 3, &ReadData[j][0], rx_num + 1);
 		for (i = 0; i < rx_num; i++) {
-			snprintf(pTmp, sizeof(pTmp), "%3d", ReadData[j][i]);
+			snprintf(pTmp, sizeof(pTmp), "%3d", ReadData[j][i + 1]);
 			strncat(pStr, pTmp, 4 * rx_num);
 		}
 		input_info(true, &info->client->dev, "%s\n", pStr);
@@ -2457,8 +2567,8 @@ static void get_cx_all_data(void *device_data)
 	if (info->cx_data) {
 		for (j = 0; j < tx_num; j++) {
 			for(i = 0; i < rx_num; i++){
-				info->cx_data[(j * rx_num) + i] = ReadData[j][i];
-				snprintf(buff, sizeof(buff), "%d,", ReadData[j][i]);
+				info->cx_data[(j * rx_num) + i] = ReadData[j][i + 1];
+				snprintf(buff, sizeof(buff), "%d,", ReadData[j][i + 1]);
 				strncat(all_strbuff, buff, sizeof(buff));
 			}
 		}
@@ -2815,9 +2925,7 @@ static void run_force_pressure_calibration(void *device_data)
 	fts_interrupt_set(info, INT_DISABLE);
 	fts_command(info, FTS_CMD_PRESSURE_SENSE_OFF);
 
-	info->fts_systemreset(info);
-	fts_delay(20);
-	info->fts_wait_for_ready(info);
+	info->fts_systemreset(info, 30);
 
 	fts_command(info, PRESSURE_AUTO_TUNE);
 	fts_delay(300);
@@ -2827,9 +2935,7 @@ static void run_force_pressure_calibration(void *device_data)
 	fts_delay(230);
 	fts_fw_wait_for_event(info, STATUS_EVENT_FLASH_WRITE_CXTUNE_VALUE);
 
-	info->fts_systemreset(info);
-	fts_delay(20);
-	info->fts_wait_for_ready(info);
+	info->fts_systemreset(info, 30);
 
 	fts_command(info, SENSEON);
 	fts_command(info, FTS_CMD_PRESSURE_SENSE_ON);
@@ -2837,16 +2943,14 @@ static void run_force_pressure_calibration(void *device_data)
 	fts_interrupt_set(info, INT_ENABLE);
 	enable_irq(info->irq);
 
-	fts_get_pressure_calibration_information(info);
-	if (info->pressure_cal_base == 0xFF)
-		info->pressure_cal_base = 0;
+	fts_get_factory_debug_information(info);
 
 	info->pressure_cal_base++;
 
 	if (info->pressure_cal_base > 0xFE)
 		info->pressure_cal_base = 0xFE;
 
-	fts_set_pressure_calibration_information(info, info->pressure_cal_base, info->pressure_cal_delta);
+	fts_set_factory_debug_information(info, info->pressure_cal_base, info->pressure_cal_delta, info->nv_crc_fail_count);
 
 #ifdef FTS_SUPPORT_STRINGLIB
 	ret = info->fts_write_to_string(info, &addr, &info->lowpower_flag, sizeof(info->lowpower_flag));
@@ -3227,16 +3331,14 @@ static void set_pressure_strength(void *device_data)
 #endif
 	fts_interrupt_set(info, INT_ENABLE);
 
-	fts_get_pressure_calibration_information(info);
-	if (info->pressure_cal_delta == 0xFF)
-		info->pressure_cal_delta = 0;
+	fts_get_factory_debug_information(info);
 
 	info->pressure_cal_delta++;
 
 	if (info->pressure_cal_delta > 0xFE)
 		info->pressure_cal_delta = 0xFE;
 
-	fts_set_pressure_calibration_information(info, info->pressure_cal_base, info->pressure_cal_delta);
+	fts_set_factory_debug_information(info, info->pressure_cal_base, info->pressure_cal_delta, info->nv_crc_fail_count);
 
 	sec->cmd_state = SEC_CMD_STATUS_OK;
 	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
@@ -4233,11 +4335,11 @@ int fts_get_calibration_information(struct fts_ts_info *info)
 }
 #endif
 
-int fts_set_pressure_calibration_information(struct fts_ts_info *info, unsigned char base, unsigned char delta)
+int fts_set_factory_debug_information(struct fts_ts_info *info, unsigned char base, unsigned char delta, unsigned char checksum)
 {
 	unsigned char *data = NULL;
 	int ret;
-	
+
 	/* save calibration count */
 	data = kzalloc(nvm_data[SEC_FACTORY_DEBUG].length, GFP_KERNEL);
 	if (!data) {
@@ -4248,7 +4350,7 @@ int fts_set_pressure_calibration_information(struct fts_ts_info *info, unsigned 
 
 	data[0] = base;
 	data[1] = delta;
-	data[2] = 0x00;
+	data[2] = checksum;
 	data[3] = 0x00;
 
 	/* SEC_FACTORY_DEBUG index is 4. refer "fts_nvm_data_type" write command */
@@ -4262,7 +4364,7 @@ int fts_set_pressure_calibration_information(struct fts_ts_info *info, unsigned 
 	return ret;
 }
 
-int fts_get_pressure_calibration_information(struct fts_ts_info *info)
+int fts_get_factory_debug_information(struct fts_ts_info *info)
 {
 	unsigned char *data = NULL;
 	int ret;
@@ -4279,10 +4381,22 @@ int fts_get_pressure_calibration_information(struct fts_ts_info *info)
 		input_err(true, &info->client->dev,
 			"%s: set failed. ret: %d\n", __func__, ret);
 	} else {
+		if (data[0] == 0xFF)
+			data[0] = 0x00;
 		info->pressure_cal_base = data[0];
+
+		if (data[1] == 0xFF)
+			data[1] = 0x00;
 		info->pressure_cal_delta = data[1];
+
+		if (data[2] == 0xFF)
+			data[2] = 0x00;
+		info->nv_crc_fail_count = data[2];
+
 		input_info(true, &info->client->dev,
-			"%s: pressure base:%X, delta:%X\n", __func__, info->pressure_cal_base, info->pressure_cal_delta);
+			"%s: pressure base:%X, delta:%X, crc fail count:%X\n", __func__,
+			info->pressure_cal_base, info->pressure_cal_delta,
+			info->nv_crc_fail_count);
 	}
 
 	kfree(data);
